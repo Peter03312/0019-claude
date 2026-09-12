@@ -1,0 +1,37 @@
+# Compose 发布：API + 前端宿主（Nginx）+ verify 一次性验收服务
+# 宿主端口由 WEB_PORT 覆盖：WEB_PORT=9090 docker compose up -d web
+services:
+  api:
+    build: ./backend
+    image: cotton-moisture-api
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  web:
+    build: ./frontend
+    image: cotton-moisture-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # 宿主端口必须可用 WEB_PORT 覆盖，默认 8080
+      - "${WEB_PORT:-8080}:80"
+
+  # 一次性验收：健康通过后跑集成测试，结束即退出（restart: "no"）
+  verify:
+    build: ./backend
+    image: cotton-moisture-api
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://api:8000
+      WEB_URL: http://web:80
+    command: >
+      sh -c "python -m pytest tests/test_integration.py -v -m integration"
+    restart: "no"
+    profiles: ["verify"]

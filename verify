@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# 一次性验收服务：拉起 api + web（健康通过后），对真实服务跑集成测试，结束即退出。
+#
+# 用法：
+#   ./verify                 # 默认 WEB_PORT=8080
+#   WEB_PORT=9090 ./verify
+#   FORCE_BUILD=1 ./verify   # 先 docker compose build
+set -euo pipefail
+
+cd "$(dirname "$0")"
+export WEB_PORT="${WEB_PORT:-8080}"
+COMPOSE="docker compose --profile verify"
+
+cleanup() {
+  echo "==> 验收结束，停止并清理服务"
+  $COMPOSE down --remove-orphans
+}
+trap cleanup EXIT
+
+echo "==> WEB_PORT=${WEB_PORT}；构建镜像"
+$COMPOSE build api web
+
+echo "==> 启动 api 与 web（等待健康检查通过）"
+$COMPOSE up -d api web
+
+echo "==> 运行一次性 verify 服务（依赖服务已就绪，--no-deps 避免重复拉起）"
+$COMPOSE run --rm --use-aliases --no-deps verify

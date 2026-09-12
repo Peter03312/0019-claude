@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node / Vite
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+# 环境与编辑器
+.env
+.env.local
+*.local
+.DS_Store
+.idea/
+.vscode/
