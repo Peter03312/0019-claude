@@ -6,6 +6,12 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+# 试样记录 SQLite 本地库
+records.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Node / Vite
 node_modules/
 frontend/dist/

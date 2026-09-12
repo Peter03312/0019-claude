@@ -5,6 +5,11 @@ services:
     build: ./backend
     image: cotton-moisture-api
     restart: unless-stopped
+    environment:
+      # 试样记录 SQLite 落盘位置（挂在命名卷上，容器重建后记录仍在）
+      RECORDS_DB_PATH: /data/records.db
+    volumes:
+      - api-data:/data
     expose:
       - "8000"
 
@@ -35,3 +40,7 @@ services:
       sh -c "python -m pytest tests/test_integration.py -v -m integration"
     restart: "no"
     profiles: ["verify"]
+
+volumes:
+  # api 的试样记录 SQLite 数据目录
+  api-data:

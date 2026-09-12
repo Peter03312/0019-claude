@@ -1,5 +1,6 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
+import ResultView from './components/ResultView.vue'
 
 const MIN_READINGS = 3
 const MAX_READINGS = 8
@@ -16,6 +17,18 @@ const fieldErrors = reactive({
   dry_masses: [],
 })
 
+// 试样记录：保存当前裁决
+const sampleId = ref('')
+const saving = ref(false)
+const saveError = ref('')
+const saveOk = ref('')
+
+// 试样记录：按编号查询（只读，不触碰当前录入）
+const queryId = ref('')
+const querying = ref(false)
+const queryError = ref('')
+const record = ref(null)
+
 // 修改任一读数（或增减行数）立即清除旧裁决与旧的逐字段错误
 watch(
   [wetMass, dryMasses],
@@ -25,6 +38,8 @@ watch(
     fieldErrors.wet_mass = null
     fieldErrors.dry_count = null
     fieldErrors.dry_masses = []
+    saveError.value = ''
+    saveOk.value = ''
   },
   { deep: true }
 )
@@ -75,6 +90,65 @@ async function submit() {
     loading.value = false
   }
 }
+
+// 保存：服务端按同一规则重算当前录入，恒重才入库；重复编号返回冲突提示
+async function saveRecord() {
+  saving.value = true
+  saveError.value = ''
+  saveOk.value = ''
+  try {
+    const resp = await fetch('/api/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sample_id: sampleId.value,
+        wet_mass: wetMass.value,
+        dry_masses: dryMasses.map((d) => d.value),
+      }),
+    })
+    const body = await resp.json()
+    if (resp.ok) {
+      saveOk.value = `已保存为试样记录：编号 ${body.sample_id}，保存时间 ${body.saved_at}。之后可在下方按编号查询。`
+    } else if (resp.status === 409) {
+      saveError.value = body.detail || '该试样编号已存在，请更换编号。'
+    } else if (resp.status === 422) {
+      saveError.value = body.detail || '输入有误，无法保存。'
+    } else {
+      saveError.value = `服务异常（HTTP ${resp.status}），保存失败。`
+    }
+  } catch (err) {
+    saveError.value = '无法连接裁决服务，保存失败。'
+  } finally {
+    saving.value = false
+  }
+}
+
+// 查询：结果只读展示在查询区，不覆盖当前录入内容
+async function queryRecord() {
+  const id = queryId.value.trim()
+  queryError.value = ''
+  record.value = null
+  if (!id) {
+    queryError.value = '请输入要查询的试样编号。'
+    return
+  }
+  querying.value = true
+  try {
+    const resp = await fetch(`/api/records/${encodeURIComponent(id)}`)
+    const body = await resp.json()
+    if (resp.ok) {
+      record.value = body
+    } else if (resp.status === 404) {
+      queryError.value = body.detail || `未找到试样编号 ${id} 的记录。`
+    } else {
+      queryError.value = `服务异常（HTTP ${resp.status}），查询失败。`
+    }
+  } catch (err) {
+    queryError.value = '无法连接裁决服务，查询失败。'
+  } finally {
+    querying.value = false
+  }
+}
 </script>
 
 <template>
@@ -85,6 +159,7 @@ async function submit() {
         录入烘前湿样质量与按先后顺序取得的 3–8 次烘后质量（克，最多三位小数）。
         系统按“(前次−后次) ÷ 前次 ≤ 0.0005”寻找<strong>首次恒重</strong>，
         以未舍入回潮率裁决闭区间 7.5%–8.5% 是否合格。
+        已恒重的裁决可填写试样编号保存为记录，之后按编号只读查询。
       </p>
     </header>
 
@@ -167,90 +242,68 @@ async function submit() {
     </section>
 
     <section v-if="result" class="card">
-      <h2>
-        裁决结果
-        <span
-          class="badge"
-          :class="result.constant ? '' : 'pending'"
-        >
-          {{ result.constant ? `第 ${result.hit_round} 轮首次恒重` : '尚未恒重' }}
-        </span>
-      </h2>
+      <ResultView :result="result" title="裁决结果" />
 
-      <table class="rounds">
-        <thead>
-          <tr>
-            <th>轮次</th>
-            <th>前次（第 i 次）g</th>
-            <th>后次（第 i+1 次）g</th>
-            <th>前次−后次 g</th>
-            <th>(前−后)÷前</th>
-            <th>与 0.0005 比较</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="row in result.rounds"
-            :key="row.round"
-            :class="{
-              'hit-row': row.status === 'hit',
-              'ignored-row': row.status === 'ignored',
-            }"
-          >
-            <td>
-              第 {{ row.round }} 轮
-              <div class="status-tag" :class="row.status">
-                <template v-if="row.status === 'hit'">★ 首次恒重对</template>
-                <template v-else-if="row.status === 'ignored'">终点之后·仅展示</template>
-                <template v-else>未达恒重</template>
-              </div>
-            </td>
-            <td>{{ row.prev_mass }}</td>
-            <td>{{ row.curr_mass }}</td>
-            <td>{{ row.loss }}</td>
-            <td>{{ row.ratio_display }}</td>
-            <td>
-              <template v-if="row.status === 'ignored'">不改变终点</template>
-              <template v-else-if="row.status === 'hit'">≤ 0.0005，命中</template>
-              <template v-else>&gt; 0.0005，继续</template>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <!-- 恒重：突出首次恒重对、完整算式与唯一结论 -->
-      <div v-if="result.constant" class="verdict" :class="result.qualified ? 'pass' : 'fail'">
-        <div>
-          首次恒重对：
-          <span class="hit-pair">
-            第 {{ result.hit_round }} 次 {{ result.rounds[result.hit_round - 1].prev_mass }} g
-            → 第 {{ result.hit_round + 1 }} 次 {{ result.endpoint_mass }} g
+      <!-- 保存为试样记录：尚未恒重时禁用 -->
+      <div class="save-area">
+        <label class="field-label" for="sample-id">
+          试样编号
+          <span class="hint">
+            {{ result.constant ? '保存后不可改写，可按编号查询' : '尚未恒重，不能保存为试样记录' }}
           </span>
+        </label>
+        <div class="save-row">
+          <input
+            id="sample-id"
+            v-model="sampleId"
+            class="mass-input"
+            :disabled="!result.constant"
+            placeholder="例如 CF-2026-0001"
+          />
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="!result.constant || saving"
+            @click="saveRecord"
+          >
+            {{ saving ? '保存中…' : '保存为试样记录' }}
+          </button>
         </div>
-        <div class="endpoint-note">
-          恒重终点取后次质量＝第 {{ result.endpoint_index }} 次读数
-          <strong>{{ result.endpoint_mass }} g</strong>；其后读数仅展示，不改变终点。
-        </div>
-
-        <div class="formula">
-          回潮率 ＝ (湿样质量 − 恒重质量) ÷ 恒重质量 × 100<br />
-          ＝ {{ result.formula }}
-        </div>
-
-        <div class="regain-value">
-          回潮率（两位小数）：<strong>{{ result.regain }}%</strong>
-          ｜ 合格区间：[7.50%, 8.50%]
-        </div>
-        <div class="conclusion">结论：{{ result.conclusion }}</div>
+        <div v-if="saveError" class="field-error">{{ saveError }}</div>
+        <div v-if="saveOk" class="save-ok">{{ saveOk }}</div>
       </div>
+    </section>
 
-      <!-- 未恒重：不得显示回潮率 -->
-      <div v-else class="verdict pending">
-        <div class="conclusion">结论：尚未恒重</div>
-        <div>
-          全部 {{ result.rounds.length }} 个相邻轮次的 (前次−后次)÷前次 均大于 0.0005，
-          未出现首次恒重，<strong>不计算、不显示回潮率</strong>。请继续烘干并称量后再行裁决。
+    <section class="card">
+      <h2>试样记录查询</h2>
+      <div class="save-row">
+        <input
+          id="query-id"
+          v-model="queryId"
+          class="mass-input"
+          placeholder="输入试样编号，例如 CF-2026-0001"
+          @keyup.enter="queryRecord"
+        />
+        <button type="button" class="btn-primary" :disabled="querying" @click="queryRecord">
+          {{ querying ? '查询中…' : '查询' }}
+        </button>
+      </div>
+      <div v-if="queryError" class="field-error">{{ queryError }}</div>
+
+      <!-- 查询结果只读展示，不影响上方录入与裁决 -->
+      <div v-if="record" class="record-view">
+        <div class="record-meta">
+          <div>试样编号：<strong>{{ record.sample_id }}</strong></div>
+          <div>保存时间：{{ record.saved_at }}</div>
+          <div>烘前湿样质量：<strong>{{ record.wet_mass }} g</strong></div>
+          <div>
+            烘后序列（共 {{ record.dry_masses.length }} 次）：
+            <span v-for="(mass, i) in record.dry_masses" :key="i">
+              第 {{ i + 1 }} 次 <strong>{{ mass }} g</strong>{{ i < record.dry_masses.length - 1 ? '，' : '' }}
+            </span>
+          </div>
         </div>
+        <ResultView :result="record" title="试样记录（只读）" />
       </div>
     </section>
   </div>
