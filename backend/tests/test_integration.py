@@ -6,6 +6,7 @@ BASE_URL 可覆盖；docker compose verify 默认指向 http://api:8000，
 
 import os
 import uuid
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -177,3 +178,22 @@ def test_records_chain_via_web_proxy():
     got = httpx.get(f"{web_url}/api/records/{sample_id}", timeout=10)
     assert got.status_code == 200
     assert got.json() == saved.json()
+
+
+def test_sample_id_with_slash_roundtrips_direct_and_via_proxy():
+    """含斜杠的编号必须在真实 HTTP 链路上原样查回（直连与 Nginx 反代均需通过）。"""
+    sample_id = unique_id("SLASH/A/B")
+    saved = _save(sample_id, QUALIFIED_PAYLOAD)
+    assert saved.status_code == 201, saved.text
+    encoded = quote(sample_id, safe="")
+    assert "%2F" in encoded
+
+    got = httpx.get(f"{BASE_URL}/api/records/{encoded}", timeout=10)
+    assert got.status_code == 200
+    assert got.json() == saved.json()
+    assert got.json()["sample_id"] == sample_id
+
+    web_url = os.environ.get("WEB_URL", "http://web:80").rstrip("/")
+    via_proxy = httpx.get(f"{web_url}/api/records/{encoded}", timeout=10)
+    assert via_proxy.status_code == 200
+    assert via_proxy.json() == saved.json()

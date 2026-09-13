@@ -29,10 +29,19 @@ const querying = ref(false)
 const queryError = ref('')
 const record = ref(null)
 
-// 修改任一读数（或增减行数）立即清除旧裁决与旧的逐字段错误
+// 异步世代令牌：只接受最近一次发起的请求的响应，迟到的旧响应一律丢弃。
+// 录入变化会作废旧世代（旧裁决不再属于当前输入）；重复发起也会作废旧世代。
+let judgeSeq = 0
+let saveSeq = 0
+let querySeq = 0
+
+// 修改任一读数（或增减行数）立即清除旧裁决与旧的逐字段错误。
+// 同时作废所有在途请求：这些请求携带的是旧输入，其响应绝不能再落到页面上。
 watch(
   [wetMass, dryMasses],
   () => {
+    judgeSeq += 1
+    saveSeq += 1
     result.value = null
     topError.value = ''
     fieldErrors.wet_mass = null
@@ -40,6 +49,8 @@ watch(
     fieldErrors.dry_masses = []
     saveError.value = ''
     saveOk.value = ''
+    loading.value = false
+    saving.value = false
   },
   { deep: true }
 )
@@ -57,6 +68,7 @@ function dryError(index) {
 }
 
 async function submit() {
+  const seq = ++judgeSeq
   loading.value = true
   topError.value = ''
   try {
@@ -69,6 +81,8 @@ async function submit() {
       }),
     })
     const body = await resp.json()
+    // 等待期间读数已改（裁决被清除）或又发起了新裁决：本响应属于旧输入，丢弃
+    if (seq !== judgeSeq) return
     if (resp.ok) {
       result.value = body
       fieldErrors.wet_mass = null
@@ -85,14 +99,16 @@ async function submit() {
       topError.value = `服务异常（HTTP ${resp.status}），请稍后重试。`
     }
   } catch (err) {
+    if (seq !== judgeSeq) return
     topError.value = '无法连接裁决服务，请确认 API 已启动。'
   } finally {
-    loading.value = false
+    if (seq === judgeSeq) loading.value = false
   }
 }
 
 // 保存：服务端按同一规则重算当前录入，恒重才入库；重复编号返回冲突提示
 async function saveRecord() {
+  const seq = ++saveSeq
   saving.value = true
   saveError.value = ''
   saveOk.value = ''
@@ -107,6 +123,9 @@ async function saveRecord() {
       }),
     })
     const body = await resp.json()
+    // 等待期间读数被改动（输入已属另一轮裁决）或再次发起保存：旧响应的提示丢弃，
+    // 保存结果必须始终对应它自己那次输入
+    if (seq !== saveSeq) return
     if (resp.ok) {
       saveOk.value = `已保存为试样记录：编号 ${body.sample_id}，保存时间 ${body.saved_at}。之后可在下方按编号查询。`
     } else if (resp.status === 409) {
@@ -117,14 +136,18 @@ async function saveRecord() {
       saveError.value = `服务异常（HTTP ${resp.status}），保存失败。`
     }
   } catch (err) {
+    if (seq !== saveSeq) return
     saveError.value = '无法连接裁决服务，保存失败。'
   } finally {
-    saving.value = false
+    if (seq === saveSeq) saving.value = false
   }
 }
 
 // 查询：结果只读展示在查询区，不覆盖当前录入内容
 async function queryRecord() {
+  // 无论是否发起请求都推进世代：先作废旧的在途查询，并清空上一次结果，
+  // 保证查询区始终对应“最后一次查询动作”
+  const seq = ++querySeq
   const id = queryId.value.trim()
   queryError.value = ''
   record.value = null
@@ -136,6 +159,9 @@ async function queryRecord() {
   try {
     const resp = await fetch(`/api/records/${encodeURIComponent(id)}`)
     const body = await resp.json()
+    // 期间又发起了新的查询：较早的响应即使更晚到达也必须丢弃，
+    // 查询区只保留最后一次查询的结果
+    if (seq !== querySeq) return
     if (resp.ok) {
       record.value = body
     } else if (resp.status === 404) {
@@ -144,9 +170,10 @@ async function queryRecord() {
       queryError.value = `服务异常（HTTP ${resp.status}），查询失败。`
     }
   } catch (err) {
+    if (seq !== querySeq) return
     queryError.value = '无法连接裁决服务，查询失败。'
   } finally {
-    querying.value = false
+    if (seq === querySeq) querying.value = false
   }
 }
 </script>

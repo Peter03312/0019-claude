@@ -167,6 +167,10 @@ Vue 3 + Vite 前端、FastAPI 后端的全栈应用：录入烘前湿样质量�
 按编号查询试样记录。命中返回 `200`，响应结构与保存时完全相同（裁决结构 + `sample_id`
 + `saved_at`），只读；不存在返回 `404` 与 `{"detail": "未找到试样编号「…」的记录"}`。
 
+编号允许任意 1–64 个字符（包括 `/` 等路径字符）：查询时客户端必须对编号做
+百分号编码（前端 `encodeURIComponent`，路由使用 `:path` 转换器），解码后的
+`CF/2026/001` 与保存时原样一致并能查回完整快照。
+
 ## 用 Docker Compose 发布
 
 宿主端口必须由 `WEB_PORT` 覆盖（默认 8080）：
@@ -212,4 +216,5 @@ cd frontend
 npm install
 npm run dev          # 5173 端口，/api 已在 vite.config.js 代理到 :8000
 npm run build
+npm run test:race    # 挂载真实 App.vue 的异步交错回归（裁决/保存/查询响应乱序）
 ```

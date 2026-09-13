@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -260,3 +261,44 @@ def test_sample_id_saved_with_whitespace_trimmed(isolated_db):
     assert resp.status_code == 201
     assert resp.json()["sample_id"] == "TRIM-1"
     assert client.get("/api/records/TRIM-1").status_code == 200
+
+
+def test_sample_id_with_slashes_roundtrips_encoded(isolated_db):
+    """含斜杠的合法编号：保存成功后必须能用百分号编码原样查回完整快照。"""
+    judge_body = client.post("/api/judge", json=QUALIFIED_PAYLOAD).json()
+    sample_id = "CF/2026/001"
+    resp = client.post(
+        "/api/records", json={"sample_id": sample_id, **QUALIFIED_PAYLOAD}
+    )
+    assert resp.status_code == 201
+    saved = resp.json()
+    assert saved["sample_id"] == sample_id
+    assert {k: v for k, v in saved.items() if k not in ("sample_id", "saved_at")} == judge_body
+
+    # TestClient 不会自动编码，按前端 encodeURIComponent 的结果构造路径
+    got = client.get("/api/records/CF%2F2026%2F001")
+    assert got.status_code == 200
+    assert got.json() == saved
+
+
+def test_sample_id_with_slash_and_unicode_roundtrips(isolated_db):
+    """斜杠与非 ASCII 字符混合的编号同样按原样查回（路径需先经百分号编码）。"""
+    sample_id = "棉/批-2026/甲"
+    resp = client.post(
+        "/api/records", json={"sample_id": sample_id, **OUT_OF_RANGE_PAYLOAD}
+    )
+    assert resp.status_code == 201
+    saved = resp.json()
+
+    got = client.get("/api/records/" + quote(sample_id, safe=""))
+    assert got.status_code == 200
+    assert got.json() == saved
+
+
+def test_missing_slash_id_hits_route_and_returns_app_404(isolated_db):
+    """不存在的斜杠编号也应进入处理函数：返回应用 404 文案，而非框架级 Not Found。"""
+    resp = client.get("/api/records/NO%2FSUCH%2FID")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert "NO/SUCH/ID" in detail
+    assert "未找到" in detail

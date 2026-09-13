@@ -15,6 +15,7 @@ records.db
 # Node / Vite
 node_modules/
 frontend/dist/
+frontend/scripts/.gen/
 npm-debug.log*
 
 # 环境与编辑器

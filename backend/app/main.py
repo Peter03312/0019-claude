@@ -163,13 +163,18 @@ async def save_record(request: Request) -> JSONResponse:
     return JSONResponse(status_code=201, content=record)
 
 
-@app.get("/api/records/{sample_id}")
+@app.get("/api/records/{sample_id:path}")
 def get_record(sample_id: str) -> JSONResponse:
-    """按编号查询试样记录，返回与保存时同一响应结构（只读）。"""
-    record = load_snapshot(sample_id.strip())
+    """按编号查询试样记录，返回与保存时同一响应结构（只读）。
+
+    使用 :path 转换器：合法编号允许包含 “/”（保存时按 1–64 任意字符校验），
+    前端对编号做百分号编码后，解码出的 “/” 也必须能命中本路由。
+    """
+    cleaned = sample_id.strip()
+    record = load_snapshot(cleaned)
     if record is None:
         return JSONResponse(
             status_code=404,
-            content={"detail": f"未找到试样编号「{sample_id}」的记录"},
+            content={"detail": f"未找到试样编号「{cleaned}」的记录"},
         )
     return JSONResponse(status_code=200, content=record)
